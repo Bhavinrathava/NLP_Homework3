@@ -19,14 +19,14 @@ class QADataset(Dataset):
         answer_key = item['answerKey']
         
         # Combine question and fact
-        input_text = question + " " + fact
+        input_text = "[CLS] "+question + " [SEP] " + fact
 
         # Tokenize each choice
         encoded_choices = []
         for choice in choices:
             choice_text = choice['text']
             inputs = self.tokenizer.encode_plus(
-                input_text + " " + choice_text,
+                input_text + " [SEP] " + choice_text + "[END]",
                 add_special_tokens=True,
                 max_length=self.max_length,
                 padding='max_length',
@@ -38,12 +38,15 @@ class QADataset(Dataset):
                 'attention_mask': inputs['attention_mask'].squeeze()
             })
 
-        # Convert answer key to index
-        label = ord(answer_key) - ord('A')
+        # One Hot Encoding
+        label = [0, 0, 0, 0]
+        label[ord(answer_key) - ord('A')] = 1
+
+        label = torch.tensor(label, dtype=torch.float)
         
         return {
             'encoded_choices': encoded_choices,
-            'label': torch.tensor(label, dtype=torch.long)
+            'label': torch.tensor(label, dtype=torch.float)
         }
 
 

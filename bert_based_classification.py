@@ -8,24 +8,34 @@ from transformers import BertTokenizer
 
 from Dataset import get_loader
 
+import warnings
+warnings.filterwarnings("ignore")
+
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class Model(nn.Module):
     def __init__(self, model_name, num_classes, batch_size=8):
         super(Model, self).__init__()
         self.pre_trained = BertModel.from_pretrained(model_name)
-        self.fc = nn.Linear(self.pre_trained.config.hidden_size * 4, num_classes)
+
+        # Freeze the BERT Model
+        #for param in self.pre_trained.parameters():
+        #    param.requires_grad = False
+        
+
+        self.fc = nn.Linear(self.pre_trained.config.hidden_size , 1)
 
     def forward(self, input_ids, attention_mask):
-        input_ids = input_ids.view(-1, 128)
-        attention_mask = attention_mask.view(-1, 128)
+        #print(input_ids.shape, attention_mask.shape)
         output = self.pre_trained(input_ids = input_ids, attention_mask = attention_mask)
-        output = output.pooler_output.view(batch_size,  -1)
+        output = output.pooler_output
         output = self.fc(output)
         return output
     
-def convert_to_train_data(encoded_choices):
+def convert_to_train_data(encoded_choices, batch_size=8):
     input_ids, attention_mask = [], []
+    #print(f'Encoded Choices SHape: {len(encoded_choices)}')
     for choice in encoded_choices:
         input_ids.append(choice['input_ids'])
         attention_mask.append(choice['attention_mask'])
@@ -39,39 +49,69 @@ def train(model, optimizer, criterion, epochs, train_loader, val_loader, batch_s
 
     train_losses, val_losses, train_acc, val_acc = [], [], 0, 0 
 
-    for epoch in tqdm(range(epochs)):
+    for epoch in (range(epochs)):
         model.train()
-        for i, batch in tqdm(enumerate(train_loader)):
-            optimizer.zero_grad()
-            encoded_choices, labels = batch['encoded_choices'], batch['label']
-            input_ids, attention_mask = convert_to_train_data(encoded_choices)
-            input_ids, attention_mask = input_ids.to(device), attention_mask.to(device)
-            output = model(input_ids, attention_mask)
-            #print(output.shape, labels.shape)
-            loss = criterion(output, labels)
-            loss.backward()
-            optimizer.step()
-            train_losses.append(loss.item())
-        
-        model.eval()
-        with torch.no_grad():
-            for i, batch in tqdm(enumerate(val_loader)):
+        with tqdm(total=len(train_loader), desc=f"Training Epoch {epoch+1}/{epochs}") as pbar:
+            for i, batch in (enumerate(train_loader)):
+                optimizer.zero_grad()
                 encoded_choices, labels = batch['encoded_choices'], batch['label']
                 input_ids, attention_mask = convert_to_train_data(encoded_choices)
                 input_ids, attention_mask = input_ids.to(device), attention_mask.to(device)
+                labels = labels.to(device).view(-1,1)
                 output = model(input_ids, attention_mask)
-                
                 loss = criterion(output, labels)
-                val_losses.append(loss.item())
+                pbar.set_postfix({'loss': loss.item()})
+                pbar.update(1)
+
+                loss.backward()
+                optimizer.step()
+                train_losses.append(loss.item())
+            
+        model.eval()
+        with torch.no_grad():
+            with tqdm(total=len(val_loader), desc=f"Validating ") as pbar:
+                for i, batch in (enumerate(val_loader)):
+                    encoded_choices, labels = batch['encoded_choices'], batch['label']
+                    input_ids, attention_mask = convert_to_train_data(encoded_choices)
+                    input_ids, attention_mask = input_ids.to(device), attention_mask.to(device)
+                    labels = labels.to(device).view(-1, 1)
+                    output = model(input_ids, attention_mask)
+                    
+                    loss = criterion(output, labels)
+                    
+                    pbar.set_postfix({'loss': loss.item()})
+                    pbar.update(1)
+                    
+                    val_losses.append(loss.item())
 
 
 
     return train_losses, val_losses, train_acc, val_acc
 
-def evaluate():
+def evaluate(model, criterion, test_loader):
     test_loss, test_acc = 0, 0
-    
-    return test_loss, test_acc
+
+    model.eval()
+    with torch.no_grad():
+        with tqdm(total=len(test_loader), desc=f"Evaluating") as pbar:
+            for i, batch in (enumerate(test_loader)):
+                encoded_choices, labels = batch['encoded_choices'], batch['label']
+                input_ids, attention_mask = convert_to_train_data(encoded_choices)
+                input_ids, attention_mask = input_ids.to(device), attention_mask.to(device)
+                labels = labels.to(device).view(-1, 1)
+                output = model(input_ids, attention_mask)
+                loss = criterion(output, labels)
+                test_loss += loss.item()
+                pbar.set_postfix({'loss': loss.item()})
+                pbar.update(1)
+
+                # measure accuracy
+                pred = output.argmax(dim=1, keepdim=True)
+                test_acc += pred.eq(labels.view_as(pred)).sum().item()
+
+    print(f'Test Loss: {test_loss/len(test_loader)}')
+    print(f'Test Accuracy: {test_acc/len(test_loader)}')
+    return test_loss/len(test_loader), test_acc
 
 def predict():
     pass
@@ -81,8 +121,8 @@ if __name__ == '__main__':
     # Hyperparameters
     model_name = 'bert-base-uncased'
     num_classes = 4
-    epochs = 10 
-    learning_rate = 0.001
+    epochs = 10  
+    learning_rate = 3e-5
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     max_length = 128
     batch_size = 8
@@ -94,7 +134,7 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     # Define Loss Function
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCEWithLogitsLoss()
 
     # Load Data
     data = []
