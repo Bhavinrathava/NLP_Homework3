@@ -15,16 +15,16 @@ warnings.filterwarnings("ignore")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class Model(nn.Module):
-    def __init__(self, model_name, num_classes, batch_size=8):
+    def __init__(self, model_name, num_classes, batch_size=8, freeze_bert=False):
         super(Model, self).__init__()
         self.pre_trained = BertModel.from_pretrained(model_name)
 
-        # Freeze the BERT Model
-        #for param in self.pre_trained.parameters():
-        #    param.requires_grad = False
+        if(freeze_bert):
+            for param in self.pre_trained.parameters():
+                param.requires_grad = False
         
 
-        self.fc = nn.Linear(self.pre_trained.config.hidden_size , 1)
+        self.fc = nn.Linear(self.pre_trained.config.hidden_size , 4)
 
     def forward(self, input_ids, attention_mask):
         #print(input_ids.shape, attention_mask.shape)
@@ -55,40 +55,54 @@ def train(model, optimizer, criterion, epochs, train_loader, val_loader, batch_s
             for i, batch in (enumerate(train_loader)):
                 optimizer.zero_grad()
                 encoded_choices, labels = batch['encoded_choices'], batch['label']
-                input_ids, attention_mask = convert_to_train_data(encoded_choices)
+
+                input_ids, attention_mask = encoded_choices['input_ids'], encoded_choices['attention_mask']
+
                 input_ids, attention_mask = input_ids.to(device), attention_mask.to(device)
-                labels = labels.to(device).view(-1,1)
+                labels = labels.to(device)
                 output = model(input_ids, attention_mask)
+
+                # measure accuracy
+                pred = output.argmax(dim=1, keepdim=True)
+                train_acc += pred.eq(labels.view_as(pred)).sum().item()
+
                 loss = criterion(output, labels)
                 pbar.set_postfix({'loss': loss.item()})
                 pbar.update(1)
-
+                
                 loss.backward()
                 optimizer.step()
                 train_losses.append(loss.item())
+        train_acc /= len(train_loader)
             
         model.eval()
         with torch.no_grad():
             with tqdm(total=len(val_loader), desc=f"Validating ") as pbar:
                 for i, batch in (enumerate(val_loader)):
                     encoded_choices, labels = batch['encoded_choices'], batch['label']
-                    input_ids, attention_mask = convert_to_train_data(encoded_choices)
+                    input_ids, attention_mask = encoded_choices['input_ids'], encoded_choices['attention_mask']
                     input_ids, attention_mask = input_ids.to(device), attention_mask.to(device)
-                    labels = labels.to(device).view(-1, 1)
+                    labels = labels.to(device)
                     output = model(input_ids, attention_mask)
                     
+                    # measure accuracy
+                    pred = output.argmax(dim=1, keepdim=True)
+                    val_acc += pred.eq(labels.view_as(pred)).sum().item()
                     loss = criterion(output, labels)
                     
                     pbar.set_postfix({'loss': loss.item()})
                     pbar.update(1)
                     
                     val_losses.append(loss.item())
+        val_acc /= len(val_loader)
 
+        print(f'Epoch {epoch+1}/{epochs} Train Loss: {sum(train_losses)/len(train_loader)} Train Accuracy: {train_acc}')
+        print(f'Epoch {epoch+1}/{epochs} Validation Loss: {sum(val_losses)/len(val_loader)} Validation Accuracy: {val_acc}')
 
 
     return train_losses, val_losses, train_acc, val_acc
 
-def evaluate(model, criterion, test_loader):
+def evaluate(model, criterion, test_loader, batch_size=8, freeze_bert=True):
     test_loss, test_acc = 0, 0
 
     model.eval()
@@ -121,7 +135,7 @@ if __name__ == '__main__':
     # Hyperparameters
     model_name = 'bert-base-uncased'
     num_classes = 4
-    epochs = 10  
+    epochs = 1
     learning_rate = 3e-5
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     max_length = 128
@@ -134,7 +148,7 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     # Define Loss Function
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss()
 
     # Load Data
     data = []

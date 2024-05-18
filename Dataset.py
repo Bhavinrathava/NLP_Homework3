@@ -17,36 +17,31 @@ class QADataset(Dataset):
         choices = item['question']['choices']
         fact = item['fact1']
         answer_key = item['answerKey']
+    
+        input_text = ""
+        for choice, choice_val in zip(choices, ["A ","B ","C ", "D "]) : 
+            formatted_text = f"[CLS] {fact} [SEP] {question} [SEP] {choice} [SEP] {choice['text']} [END]"
+            input_text += formatted_text
         
-        # Combine question and fact
-        input_text = "[CLS] "+question + " [SEP] " + fact
-
-        # Tokenize each choice
-        encoded_choices = []
-        for choice in choices:
-            choice_text = choice['text']
-            inputs = self.tokenizer.encode_plus(
-                input_text + " [SEP] " + choice_text + "[END]",
+        inputs = self.tokenizer.encode_plus(
+                input_text,
                 add_special_tokens=True,
                 max_length=self.max_length,
                 padding='max_length',
                 truncation=True,
                 return_tensors='pt'
             )
-            encoded_choices.append({
-                'input_ids': inputs['input_ids'].squeeze(),
-                'attention_mask': inputs['attention_mask'].squeeze()
-            })
+        
+        encoded_choices = {'input_ids': inputs['input_ids'].squeeze(), 'attention_mask': inputs['attention_mask'].squeeze()}
 
         # One Hot Encoding
-        label = [0, 0, 0, 0]
-        label[ord(answer_key) - ord('A')] = 1
+        label = ord(answer_key) - ord('A')
 
-        label = torch.tensor(label, dtype=torch.float)
-        
+        label = torch.tensor(label, dtype=torch.long)
+
         return {
             'encoded_choices': encoded_choices,
-            'label': torch.tensor(label, dtype=torch.float)
+            'label': torch.tensor(label, dtype=torch.long)
         }
 
 
