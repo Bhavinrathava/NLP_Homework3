@@ -63,9 +63,9 @@ def train_model(model, dataloader, optimizer, device, epochs, criterion):
                 input_ids, attention_mask, labels = input_ids.to(device), attention_mask.to(device), labels.to(device)
 
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
+                #print(outputs.logits.shape, labels.shape)
                 # Take the first token as the prediction
-                logits = outputs.logits[:, 0, :]
+                logits = outputs.logits[:, -1, :]
                 loss = criterion(logits, labels)
                 
 
@@ -89,8 +89,8 @@ def evaluate_model(model, dataloader, device, criterion):
         input_ids, attention_mask, labels = batch
         input_ids, attention_mask, labels = input_ids.to(device), attention_mask.to(device), labels.to(device)
 
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-        logits = outputs.logits[:, 0, :]
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        logits = outputs.logits[:, -1, :]
         loss = criterion(logits, labels)
         val_losses += loss.item()
     print(f"Validation Loss: {val_losses / len(dataloader)}")
@@ -102,11 +102,12 @@ def generate_predictions(model, data_loader, tokenizer, device):
     references = []
     with torch.no_grad():
         for batch in data_loader:
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            outputs = model.generate(input_ids=input_ids, attention_mask=attention_mask, max_length=512)
+            input_ids, attention_mask, labels = batch
+            input_ids, attention_mask, labels = input_ids.to(device), attention_mask.to(device), labels.to(device)
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask).logits[:,-1,:].argmax(dim=-1)
             pred_labels = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            true_labels = tokenizer.batch_decode(batch['labels'], skip_special_tokens=True)
+            true_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
             predictions.extend(pred_labels)
             references.extend(true_labels)
     return predictions, references
@@ -125,7 +126,7 @@ def main():
 
     #Define Hyper Parameters 
     model_name = 'gpt-2'
-    epochs = 1
+    epochs = 10 
     learning_rate = 3e-5
     take_last_token = True
     max_length = 128
