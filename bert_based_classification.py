@@ -96,8 +96,8 @@ def train(model, optimizer, criterion, epochs, train_loader, val_loader, batch_s
                     val_losses.append(loss.item())
         val_acc /= len(val_loader)
 
-        print(f'Epoch {epoch+1}/{epochs} Train Loss: {sum(train_losses)/len(train_loader)} Train Accuracy: {train_acc}')
-        print(f'Epoch {epoch+1}/{epochs} Validation Loss: {sum(val_losses)/len(val_loader)} Validation Accuracy: {val_acc}')
+        print(f'Epoch {epoch+1}/{epochs} Train Loss: {sum(train_losses)/len(train_loader)} Train Accuracy: {train_acc * 100}')
+        print(f'Epoch {epoch+1}/{epochs} Validation Loss: {sum(val_losses)/len(val_loader)} Validation Accuracy: {val_acc * 100}')
 
 
     return train_losses, val_losses, train_acc, val_acc
@@ -110,9 +110,9 @@ def evaluate(model, criterion, test_loader, batch_size=8, freeze_bert=True):
         with tqdm(total=len(test_loader), desc=f"Evaluating") as pbar:
             for i, batch in (enumerate(test_loader)):
                 encoded_choices, labels = batch['encoded_choices'], batch['label']
-                input_ids, attention_mask = convert_to_train_data(encoded_choices)
+                input_ids, attention_mask = encoded_choices['input_ids'], encoded_choices['attention_mask']
                 input_ids, attention_mask = input_ids.to(device), attention_mask.to(device)
-                labels = labels.to(device).view(-1, 1)
+                labels = labels.to(device)
                 output = model(input_ids, attention_mask)
                 loss = criterion(output, labels)
                 test_loss += loss.item()
@@ -124,8 +124,8 @@ def evaluate(model, criterion, test_loader, batch_size=8, freeze_bert=True):
                 test_acc += pred.eq(labels.view_as(pred)).sum().item()
 
     print(f'Test Loss: {test_loss/len(test_loader)}')
-    print(f'Test Accuracy: {test_acc/len(test_loader)}')
-    return test_loss/len(test_loader), test_acc
+    print(f'Test Accuracy: {test_acc/len(test_loader) * 100}')
+    return test_loss/len(test_loader), test_acc / len(test_loader)
 
 def predict():
     pass
@@ -135,14 +135,14 @@ if __name__ == '__main__':
     # Hyperparameters
     model_name = 'bert-base-uncased'
     num_classes = 4
-    epochs = 1
-    learning_rate = 3e-5
+    epochs = 3
+    learning_rate = 0.0001
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    max_length = 128
-    batch_size = 8
-
+    max_length = 512
+    batch_size = 2
+    freeze_bert = True
     # Define Model 
-    model = Model(model_name, num_classes)
+    model = Model(model_name, num_classes, batch_size, freeze_bert)
     model.to(device)
     # Define Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -169,16 +169,6 @@ if __name__ == '__main__':
             data.append(json.loads(line))
     test_loader = get_loader(data, tokenizer, max_length, batch_size)
     
-
-    # Print Model Summary
-    #print(model)
-
-    # Print Dataloader Summary
-    #print(f'Length of Train Dataloader : {len(train_loader)}')
-    #print(f'Length of Validation Dataloader : {len(val_loader)}')
-    #print(f'Length of Test Dataloader : {len(test_loader)}')
-
-
     # Train Model
     train_losses, val_losses, train_acc, val_acc = train(model, optimizer, criterion, epochs, train_loader, val_loader)
 

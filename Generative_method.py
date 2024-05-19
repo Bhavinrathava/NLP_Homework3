@@ -31,12 +31,12 @@ class MCADataSet(Dataset):
 
         return encoded_inputs['input_ids'].squeeze(0), encoded_inputs['attention_mask'].squeeze(0), label_tensor
     
-class BertForMCQA(nn.Module):
-    def __init__(self, bert_model, take_last_token=True):
-        super(BertForMCQA, self).__init__()
-        self.bert = bert_model
+class GPT2ForMCQA(nn.Module):
+    def __init__(self, gpt_model, take_last_token=True):
+        super(GPT2ForMCQA, self).__init__()
+        self.gpt = gpt_model
     def forward(self, input_ids, attention_mask, labels=None):
-        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        outputs = self.gpt(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
         return outputs
 
 def read_data(file_path):
@@ -50,7 +50,7 @@ def read_data(file_path):
             data.append(json.loads(line))
     return data
 
-def train_model(model, dataloader, optimizer, device, epochs, criterion):
+def train_model(model, dataloader, optimizer, device, epochs, criterion, tokenizer, val_dataloader=None):
     
     model.train()
     train_losses = []
@@ -63,26 +63,30 @@ def train_model(model, dataloader, optimizer, device, epochs, criterion):
                 input_ids, attention_mask, labels = input_ids.to(device), attention_mask.to(device), labels.to(device)
 
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-                #print(outputs.logits.shape, labels.shape)
-                # Take the first token as the prediction
                 logits = outputs.logits[:, -1, :]
+
                 loss = criterion(logits, labels)
-                
+                train_loss += loss.item()
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 
                 pbar.set_postfix({'loss': loss.item()})
-                pbar.update(1)
-                train_loss += loss.item()
+                pbar.update(1)        
 
         train_losses.append(train_loss / len(dataloader))
-        print(f"Epoch {epoch+1}/{epochs} Loss: {train_loss / len(dataloader)}")
 
-    return train_losses
+        if val_dataloader:
+            val_loss, val_acc = evaluate_model(model, val_dataloader, device, criterion, tokenizer)
+            print(f'Epoch {epoch+1}/{epochs} Validation Loss: {val_loss }')
+            print(f'Epoch {epoch+1}/{epochs} Validation ccuracy: {val_acc}')
+        
+        print(f"Epoch {epoch+1}/{epochs} Training Loss: {train_loss / len(dataloader)}")
+
+    return train_losses , val_loss, val_acc
     
-def evaluate_model(model, dataloader, device, criterion):
+def evaluate_model(model, dataloader, device, criterion, tokenizer):
     model.eval()
     val_losses = 0
     for batch in dataloader:
@@ -93,8 +97,14 @@ def evaluate_model(model, dataloader, device, criterion):
         logits = outputs.logits[:, -1, :]
         loss = criterion(logits, labels)
         val_losses += loss.item()
+
+    # measure accuracy
+    preds, references = generate_predictions(model, dataloader, tokenizer, device)
+    accuracy = calculate_accuracy(preds, references)
+    
+    print(f"Validation Accuracy: {accuracy}")
     print(f"Validation Loss: {val_losses / len(dataloader)}")
-    return val_losses / len(dataloader)
+    return val_losses / len(dataloader) , accuracy
 
 def generate_predictions(model, data_loader, tokenizer, device):
     model.eval()
@@ -119,7 +129,7 @@ def calculate_accuracy(predictions, references):
     for pred, ref in zip(predictions, references):
         if pred.strip() == ref.strip():
             correct += 1
-    return correct / total
+    return correct / total * 100
 
 
 def main():
@@ -129,13 +139,13 @@ def main():
     epochs = 10 
     learning_rate = 3e-5
     take_last_token = True
-    max_length = 128
-    batch_size = 8
+    max_length = 512
+    batch_size = 1
     # Load Tokenizer
     tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     tokenizer.pad_token = tokenizer.eos_token
     model = GPT2LMHeadModel.from_pretrained('gpt2')
-    model = BertForMCQA(model, take_last_token=take_last_token)
+    model = GPT2ForMCQA(model, take_last_token=take_last_token)
 
     # Load Data
     data = read_data('train_complete.jsonl')
@@ -162,10 +172,13 @@ def main():
     #Define Loss Function
     criterion = nn.CrossEntropyLoss()
 
-    # Train Model
-    train_losses = train_model(model, train_loader, optimizer, device, epochs, criterion)
-    val_loss = evaluate_model(model, val_loader, device, criterion)
+    predictions, references = generate_predictions(model, test_loader, tokenizer, device)
+    accuracy = calculate_accuracy(predictions, references)
+    print(f"Zero-Shot Test Accuracy: {accuracy}")
 
+    # Train Model
+    train_losses, val_loss, val_acc = train_model(model, train_loader, optimizer, device, epochs, criterion, tokenizer, val_loader)
+ 
     # Generate Predictions
     predictions, references = generate_predictions(model, test_loader, tokenizer, device)
     accuracy = calculate_accuracy(predictions, references)
